@@ -41,6 +41,9 @@ namespace plaits {
 
 const float kVariableSawNotchDepth = 0.2f;
 
+// [Plaits guide] Band-limited oscillator: a notched saw morphing into a triangle.
+// Phase accumulator + PolyBLEP: compute the naive waveform, then patch each discontinuity
+// with a small polynomial so it does not alias.
 class VariableSawOscillator {
  public:
   VariableSawOscillator() { }
@@ -57,6 +60,8 @@ class VariableSawOscillator {
     waveshape_ = 0.0f;
   }
   
+  // Fills `out` with `size` samples. `frequency` is cycles per sample, `pw` is where the wave
+  // bends/steps, `waveshape` crossfades notched-saw (0) to triangle (1).
   void Render(
       float frequency,
       float pw,
@@ -73,6 +78,7 @@ class VariableSawOscillator {
       CONSTRAIN(pw, frequency * 2.0f, 1.0f - 2.0f * frequency);
     }
 
+    // These three interpolators smooth frequency, pw and waveshape across the 12-sample block.
     stmlib::ParameterInterpolator fm(&frequency_, frequency, size);
     stmlib::ParameterInterpolator pwm(&pw_, pw, size);
     stmlib::ParameterInterpolator waveshape_modulation(
@@ -81,6 +87,8 @@ class VariableSawOscillator {
     float next_sample = next_sample_;
     
     while (size--) {
+      // BLEP corrections can spill into the next sample. this_sample = value already owed to this
+      // sample from the last iteration; next_sample collects what we owe the one after.
       float this_sample = next_sample;
       next_sample = 0.0f;
     
@@ -92,8 +100,11 @@ class VariableSawOscillator {
       const float slope_up = 1.0f / (pw);
       const float slope_down = 1.0f / (1.0f - pw);
 
+      // Phase accumulator: advance each sample; wrapping at 1.0 is one cycle.
       phase_ += frequency;
       
+      // Crossed pw while rising: correct the discontinuity. t = fractional sample position of the
+      // crossing (0..1), which tells the BLEP polynomial where to put the step.
       if (!high_ && phase_ >= pw) {
         const float triangle_step = (slope_up + slope_down) * frequency * triangle_amount;
         const float notch = (kVariableSawNotchDepth + 1.0f - pw) * notch_amount;
@@ -103,6 +114,7 @@ class VariableSawOscillator {
         this_sample -= triangle_step * stmlib::ThisIntegratedBlepSample(t);
         next_sample -= triangle_step * stmlib::NextIntegratedBlepSample(t);
         high_ = true;
+      // Phase wrapped: the saw falls back to zero, again corrected with BLEP.
       } else if (phase_ >= 1.0f) {
         phase_ -= 1.0f;
         const float triangle_step = (slope_up + slope_down) * frequency * triangle_amount;
@@ -115,6 +127,7 @@ class VariableSawOscillator {
         high_ = false;
       }
     
+      // Add the naive (aliasing) waveform value; combined with the corrections above it is band-limited.
       next_sample += ComputeNaiveSample(
           phase_,
           pw,
@@ -124,6 +137,7 @@ class VariableSawOscillator {
           notch_amount);
       previous_pw_ = pw;
 
+      // Scale from 0..1 to -1..1 (and normalise for the notch), then advance the output pointer.
       *out++ = (2.0f * this_sample - 1.0f) / (1.0f + kVariableSawNotchDepth);
     }
     
@@ -132,6 +146,7 @@ class VariableSawOscillator {
 
 
  private:
+  // Waveform as a pure function of phase (0..1): a notched saw and a triangle, crossfaded.
   inline float ComputeNaiveSample(
       float phase,
       float pw,

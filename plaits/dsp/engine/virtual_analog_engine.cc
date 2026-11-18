@@ -37,9 +37,11 @@ namespace plaits {
 using namespace std;
 using namespace stmlib;
 
+// [Plaits guide] Init is the __init__ equivalent. Note there is no `new`: buffers come from the arena.
 void VirtualAnalogEngine::Init(BufferAllocator* allocator) {
   primary_.Init();
   auxiliary_.Init();
+  // Start the auxiliary oscillator a quarter cycle out of phase with the primary.
   auxiliary_.set_master_phase(0.25f);
   sync_.Init();
   variable_saw_.Init();
@@ -54,14 +56,19 @@ void VirtualAnalogEngine::Reset() {
   
 }
 
+// Semitone stops the HARMONICS knob snaps towards: unison, fifth, octave, octave+fifth, 2 octaves.
+// The tiny .01 offsets keep detuned pairs slightly beating rather than perfectly locked.
 const float intervals[5] = {
   0.0f, 7.01f, 12.01f, 19.01f, 24.01f
 };
 
+// Smoothstep: 3x^2 - 2x^3. Flat at 0 and 1, so values linger near the interval stops.
 inline float Squash(float x) {
   return x * x * (3.0f - 2.0f * x);
 }
 
+// Maps knob 0..1 to a detune in semitones. Centre = 0, either side goes up/down through the table.
+// MAKE_INTEGRAL_FRACTIONAL (macro) splits a float into detune_integral and detune_fractional.
 float VirtualAnalogEngine::ComputeDetuning(float detune) const {
   detune = 2.05f * detune - 1.025f;
   CONSTRAIN(detune, -1.0f, 1.0f);
@@ -75,6 +82,8 @@ float VirtualAnalogEngine::ComputeDetuning(float detune) const {
   return (a + (b - a) * Squash(Squash(detune_fractional))) * sign;
 }
 
+// The VA engine's Render. Three layouts below, chosen at compile time by VA_VARIANT.
+// Outputs: `out` is the main output buffer, `aux` the second output, both `size` samples long.
 void VirtualAnalogEngine::Render(
     const EngineParameters& parameters,
     float* out,
@@ -163,6 +172,9 @@ void VirtualAnalogEngine::Render(
     out[i] += (aux[i] - out[i]) * auxiliary_amount_modulation.Next();
   }
   
+// [Plaits guide] VARIANT 2 (the one compiled in).
+//   OUT = variable square (TIMBRE) + variable saw (MORPH, detuned by HARMONICS)
+//   AUX = 'monster sync': two hard-synced varishape oscillators, difference of the two
 #elif VA_VARIANT == 2
 
   // 1 = variable square controlled by TIMBRE.
@@ -170,8 +182,10 @@ void VirtualAnalogEngine::Render(
   // OUT = 1 + 2.
   // AUX = dual variable waveshape controlled by MORPH, self sync by TIMBRE.
   
+  // Square the knob so the sync amount ramps in gently at the low end.
   const float sync_amount = parameters.timbre * parameters.timbre;
   const float auxiliary_detune = ComputeDetuning(parameters.harmonics);
+  // Frequencies are normalised: cycles per sample (so 0.01 = 480 Hz at 48 kHz).
   const float primary_f = NoteToFrequency(parameters.note);
   const float auxiliary_f = NoteToFrequency(parameters.note + auxiliary_detune);
   const float primary_sync_f = NoteToFrequency(
@@ -186,6 +200,8 @@ void VirtualAnalogEngine::Render(
   CONSTRAIN(pw, 0.5f, 0.995f);
   
   // Render monster sync to AUX.
+  // Hard-synced oscillator: master at primary_f, slave at primary_sync_f. Output goes to `out`
+  // temporarily; it is overwritten later, so here it just serves as a scratch for the AUX math.
   primary_.Render(primary_f, primary_sync_f, pw, shape, out, size);
   auxiliary_.Render(auxiliary_f, auxiliary_sync_f, pw, shape, aux, size);
   for (size_t i = 0; i < size; ++i) {
@@ -193,6 +209,7 @@ void VirtualAnalogEngine::Render(
   }
   
   // Render double varishape to OUT.
+  // Square-wave section: TIMBRE sets pulse width and, past 0.5, the hard-sync ratio.
   float square_pw = 1.3f * parameters.timbre - 0.15f;
   CONSTRAIN(square_pw, 0.005f, 0.5f);
   
@@ -202,6 +219,7 @@ void VirtualAnalogEngine::Render(
   
   const float square_gain = min(parameters.timbre * 8.0f, 1.0f);
   
+  // Saw section: MORPH sweeps the saw shape (notch width, then triangle morph).
   float saw_pw = parameters.morph < 0.5f
       ? parameters.morph + 0.5f
       : 1.0f - (parameters.morph - 0.5f) * 2.0f;
@@ -221,8 +239,11 @@ void VirtualAnalogEngine::Render(
       primary_f, square_sync_f, square_pw, 1.0f, temp_buffer_, size);
   variable_saw_.Render(auxiliary_f, saw_pw, saw_shape, out, size);
   
+  // Normalise so the loudest of the two components is 1: loudness stays steady as knobs move.
   float norm = 1.0f / (std::max(square_gain, saw_gain));
   
+  // ParameterInterpolator: linear ramp from last block's value (stored in the member) to the new
+  // one across the block, so gain changes do not click. .Next() returns the value for each sample.
   ParameterInterpolator square_gain_modulation(
       &auxiliary_amount_,
       square_gain * 0.3f * norm,
@@ -234,6 +255,7 @@ void VirtualAnalogEngine::Render(
       size);
   
   for (size_t i = 0; i < size; ++i) {
+    // Final mix of saw and square into OUT, per-sample, with the smoothed gains.
     out[i] = out[i] * saw_gain_modulation.Next() + \
         square_gain_modulation.Next() * temp_buffer_[i];
   }

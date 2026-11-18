@@ -44,6 +44,9 @@
 
 namespace plaits {
 
+// [Plaits guide] Band-limited oscillator that morphs saw -> triangle -> square, with optional
+// hard sync. `master` is the sync source oscillator, `slave` (the audible one) resets when
+// the master wraps. PolyBLEP anti-aliasing at every discontinuity.
 class VariableShapeOscillator {
  public:
   VariableShapeOscillator() { }
@@ -88,6 +91,7 @@ class VariableShapeOscillator {
         out, size);
   }
   
+  // Compile-time flags: the compiler builds specialised copies with the unused branches removed.
   template<bool enable_sync, bool output_phase>
   void Render(
       float master_frequency,
@@ -110,6 +114,7 @@ class VariableShapeOscillator {
       CONSTRAIN(pw, frequency * 2.0f, 1.0f - 2.0f * frequency);
     }
     
+    // Block-wise linear smoothing of every parameter (frequencies, pw, waveshape, phase mod).
     stmlib::ParameterInterpolator master_fm(
         &master_frequency_, master_frequency, size);
     stmlib::ParameterInterpolator fm(&slave_frequency_, frequency, size);
@@ -134,12 +139,15 @@ class VariableShapeOscillator {
       const float pw = pwm.Next();
       const float waveshape = waveshape_modulation.Next();
       
+      // waveshape 0..1: 0 = saw, 0.5 = triangle, 1 = square. These two weights crossfade between them.
       const float square_amount = std::max(waveshape - 0.5f, 0.0f) * 2.0f;
       const float triangle_amount = std::max(1.0f - waveshape * 2.0f, 0.0f);
       
       const float slope_up = 1.0f / (pw);
       const float slope_down = 1.0f / (1.0f - pw);
 
+      // Hard sync: advance the master phase; if it wrapped, the slave must restart. reset_time is the
+      // fractional-sample time of the wrap, so the BLEP is placed accurately.
       if (enable_sync) {
         master_phase_ += master_frequency;
         if (master_phase_ >= 1.0f) {
@@ -173,6 +181,7 @@ class VariableShapeOscillator {
         }
       }
       
+      // Advance the audible oscillator, then fix up pulse-edge / wrap discontinuities with BLEP below.
       slave_phase_ += slave_frequency;
       while (transition_during_reset || !reset) {
         if (!high_) {
@@ -207,6 +216,7 @@ class VariableShapeOscillator {
         }
       }
     
+      // Apply the hard-sync reset: slave restarts partway through the sample, by the leftover time.
       if (enable_sync && reset) {
         slave_phase_ = reset_time * slave_frequency;
         high_ = false;
@@ -234,6 +244,7 @@ class VariableShapeOscillator {
         }
         *out++ = phasor + phase_modulation.Next() * this_sample;
       } else {
+        // Normal (audio) output path: map 0..1 to -1..1.
         *out++ = (2.0f * this_sample - 1.0f);
       }
     }
@@ -246,6 +257,7 @@ class VariableShapeOscillator {
   }
   
  private:
+  // Waveform as a function of phase: saw, square and triangle crossfaded by *_amount.
   inline float ComputeNaiveSample(
       float phase,
       float pw,

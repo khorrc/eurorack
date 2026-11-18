@@ -34,6 +34,10 @@ namespace plaits {
 using namespace std;
 using namespace stmlib;
 
+// [Plaits guide] Voice owns every engine as a member object and registers them in a fixed order.
+// The order here is the order of the ENGINE knob. Args: engine, already_enveloped, out_gain, aux_gain.
+// A negative gain means 'use a limiter instead of fixed gain'. already_enveloped=true means the
+// engine makes its own amplitude envelope (drums, strings), so the LPG is bypassed.
 void Voice::Init(BufferAllocator* allocator) {
   engines_.Init();
 
@@ -65,6 +69,8 @@ void Voice::Init(BufferAllocator* allocator) {
   engines_.RegisterInstance(&hi_hat_engine_, true, 0.8f, 0.8f);
   
   for (int i = 0; i < engines_.size(); ++i) {
+    // The firmware has very little RAM, so allocator->Free() resets the arena before each engine
+    // Init(): every engine's buffers overlap in the same memory. Only the active engine is used.
     // All engines will share the same RAM space.
     allocator->Free();
     engines_.get(i)->Init(allocator);
@@ -87,6 +93,9 @@ void Voice::Init(BufferAllocator* allocator) {
   trigger_delay_.Init(trigger_delay_line_);
 }
 
+// [Plaits guide] Called once per block of 12 samples (see plaits.cc). Overall flow:
+//   1. trigger edge detection  2. pick engine  3. build EngineParameters
+//   4. engine->Render()  5. LPG envelope  6. post-process into the output frames.
 void Voice::Render(
     const Patch& patch,
     const Modulations& modulations,
@@ -96,6 +105,7 @@ void Voice::Render(
       
   // Delay trigger by 1ms to deal with sequencers or MIDI interfaces whose
   // CV out lags behind the GATE out.
+  // A tiny delay line holds the trigger back so it does not arrive before the pitch CV.
   trigger_delay_.Write(modulations.trigger);
   float trigger_value = trigger_delay_.Read(kTriggerDelay);
   
@@ -119,10 +129,13 @@ void Voice::Render(
   }
 
   // Engine selection.
+  // The quantizer turns knob + CV into an integer, with hysteresis so it does not flicker.
   int engine_index = engine_quantizer_.Process(
       patch.engine,
       engine_cv_);
   
+  // `e` is a base-class pointer. e->Render() below calls whichever subclass is selected
+  // (virtual dispatch, like calling a method on a Python object of any subclass).
   Engine* e = engines_.get(engine_index);
   
   if (engine_index != previous_engine_index_ || reload_user_data_) {
@@ -138,6 +151,7 @@ void Voice::Render(
     previous_engine_index_ = engine_index;
     reload_user_data_ = false;
   }
+  // From here to the e->Render() call we fill in p: note, harmonics, timbre, morph, accent, trigger.
   EngineParameters p;
 
   bool rising_edge = trigger_state_ && !previous_trigger_state;
@@ -190,6 +204,8 @@ void Voice::Render(
     }
   }
   
+  // ApplyModulations (voice.h) = knob + attenuverter * (CV or internal decay envelope), clamped.
+  // Each of note/timbre/morph uses it, so patching a CV or a trigger changes the source.
   p.note = ApplyModulations(
       patch.note + note,
       patch.frequency_modulation_amount,
@@ -225,12 +241,16 @@ void Voice::Render(
       1.0f);
 
   bool already_enveloped = pp_s.already_enveloped;
+  // THE synthesis call. The engine writes 12 samples each into out_buffer_ and aux_buffer_.
+  // `&already_enveloped` lets the engine say 'I already have an envelope' for this block.
   e->Render(p, out_buffer_, aux_buffer_, size, &already_enveloped);
   
   bool lpg_bypass = already_enveloped || \
       (!modulations.level_patched && !modulations.trigger_patched);
   
   // Compute LPG parameters.
+  // The low-pass gate. With a LEVEL CV it follows it (ProcessLP); with only a trigger it is
+  // 'pinged' (ProcessPing) and rings out. Otherwise it is bypassed and the signal passes straight.
   if (!lpg_bypass) {
     const float hf = patch.lpg_colour;
     const float decay_tail = (20.0f * kBlockSize) / kSampleRate *
@@ -246,6 +266,8 @@ void Voice::Render(
     lpg_envelope_.Init();
   }
   
+  // Post-processor applies engine gain / limiter and the LPG (gain + filter + HF bleed) to the
+  // block and writes interleaved samples into frames->out. The aux jack follows below.
   out_post_processor_.Process(
       pp_s.out_gain,
       lpg_bypass,

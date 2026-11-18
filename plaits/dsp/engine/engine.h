@@ -49,6 +49,9 @@ enum TriggerState {
   TRIGGER_HIGH = 4,
 };
 
+// [Plaits guide] This struct is the ENTIRE interface from the module to an engine.
+// Think of it as a Python dataclass: voice.cc fills it in each block, the engine reads it.
+// note is MIDI-style semitones; timbre/morph/harmonics are 0..1 (the three knobs plus CV).
 struct EngineParameters {
   int trigger;
   float note;
@@ -75,6 +78,8 @@ struct PostProcessingSettings {
   bool already_enveloped;
 };
 
+// [Plaits guide] Abstract base class (like a Python ABC). Every synthesis model inherits
+// from this and implements Render(): fill `out` and `aux` with `size` samples (size is 12).
 class Engine {
  public:
   Engine() { }
@@ -82,6 +87,8 @@ class Engine {
   virtual void Init(stmlib::BufferAllocator* allocator) = 0;
   virtual void Reset() = 0;
   virtual void LoadUserData(const uint8_t* user_data) = 0;
+  // The `= 0` below means 'pure virtual': subclasses MUST provide this.
+  // `float* out` is a pointer to a float array; the engine writes into it in place.
   virtual void Render(
       const EngineParameters& parameters,
       float* out,
@@ -92,6 +99,8 @@ class Engine {
 };
 
 template<int max_size>
+// [Plaits guide] A fixed-size list of Engine pointers plus per-engine output gain settings.
+// No dynamic allocation on the firmware, so it is a plain array, not a std::vector.
 class EngineRegistry {
  public:
   EngineRegistry() { }

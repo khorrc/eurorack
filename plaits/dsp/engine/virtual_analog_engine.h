@@ -33,10 +33,13 @@
 #include "plaits/dsp/oscillator/variable_saw_oscillator.h"
 #include "plaits/dsp/oscillator/variable_shape_oscillator.h"
 
+// [Plaits guide] Compile-time switch: virtual_analog_engine.cc has 3 different engine layouts
+// selected by #if VA_VARIANT == 0/1/2. Only the one named here is compiled in.
 #define VA_VARIANT 2
 
 namespace plaits {
   
+// Inherits from Engine (see engine.h) and overrides Init/Reset/LoadUserData/Render.
 class VirtualAnalogEngine : public Engine {
  public:
   VirtualAnalogEngine() { }
@@ -54,14 +57,18 @@ class VirtualAnalogEngine : public Engine {
  private:
   float ComputeDetuning(float detune) const;
   
+  // Oscillator objects hold their own state (phase etc.) between blocks, like Python instance
+  // attributes. Three shape oscillators plus one saw oscillator are used by variant 2.
   VariableShapeOscillator primary_;
   VariableShapeOscillator auxiliary_;
 
   VariableShapeOscillator sync_;
   VariableSawOscillator variable_saw_;
 
+  // These two floats remember last block's gain so ParameterInterpolator can ramp smoothly.
   float auxiliary_amount_;
   float xmod_amount_;
+  // Scratch buffer of one block, taken from the shared allocator in Init().
   float* temp_buffer_;
   
   DISALLOW_COPY_AND_ASSIGN(VirtualAnalogEngine);
