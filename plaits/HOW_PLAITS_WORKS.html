@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How Plaits works</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:50rem;margin:2rem auto;padding:0 1rem;color:#222}
+code,pre{font-family:ui-monospace,monospace;font-size:.9em}
+code{background:#f0f0f0;padding:.1em .3em;border-radius:3px}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:.4rem .6rem;text-align:left;vertical-align:top}
+h1,h2,h3{line-height:1.25}
+@media(prefers-color-scheme:dark){body{background:#161616;color:#ddd}code{background:#2a2a2a}td,th{border-color:#444}a{color:#8ab4ff}}
+</style></head><body>
+<h1>How Plaits works, at code level</h1>
+<p>A guide for readers who know some Python but not C++. Links point to the code at commit <code>54b4961</code> of this fork, so line numbers stay valid. The linked source files (<code>engine.h</code>, <code>voice.cc</code>, <code>virtual_analog_engine.h/.cc</code>, <code>variable_saw_oscillator.h</code>, <code>variable_shape_oscillator.h</code>) carry extra <code>[Plaits guide]</code> comments on this branch; the code itself is unchanged.</p>
+
+<h2>C++ for Python readers</h2>
+<ul>
+<li><b><code>.h</code> and <code>.cc</code> files.</b> A <code>.h</code> header declares a class and its fields. A <code>.cc</code> file holds the method bodies. Small methods often sit in the header, which is where the oscillators live.</li>
+<li><b><code>class Foo : public Engine</code></b> means Foo inherits from Engine. <code>virtual ... = 0</code> marks an abstract method that every engine must implement.</li>
+<li><b><code>float* out</code> and <code>size_t size</code></b> are a pointer to an array of floats plus its length. Think of a NumPy buffer filled in place. Nothing is returned.</li>
+<li><b><code>&amp;x</code></b> passes a reference, so the callee can modify x. <b><code>const</code></b> means read-only.</li>
+<li><b><code>#if VA_VARIANT == 2</code></b> is compile-time selection, like deleting the other branches before the program is built.</li>
+<li><b><code>template&lt;bool enable_sync, ...&gt;</code></b> generates a separate copy of the function per flag combination, so the <code>if (enable_sync)</code> check costs nothing at runtime.</li>
+<li><b>No dynamic memory.</b> The firmware runs on a small STM32. <code>Init()</code> plays the role of <code>__init__</code>, and buffers come from a <code>BufferAllocator</code> arena.</li>
+</ul>
+
+<h2>How <code>plaits/</code> is organised</h2>
+<table>
+<tr><th>Path</th><th>Role</th></tr>
+<tr><td><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/plaits.cc"><code>plaits.cc</code></a></td><td>Firmware main. Sets up hardware, reads ADC and CV, calls <code>voice.Render()</code> once per audio block (<a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/plaits.cc#L122">line 122</a>).</td></tr>
+<tr><td><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/ui.cc"><code>ui.cc</code></a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/settings.cc"><code>settings.cc</code></a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/pot_controller.h"><code>pot_controller.h</code></a></td><td>Knobs, buttons, LEDs and saved calibration.</td></tr>
+<tr><td><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc"><code>dsp/voice.cc</code></a></td><td>The per-voice pipeline: modulation, engine, LPG.</td></tr>
+<tr><td><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine">dsp/engine/</a></td><td>The synthesis models, one class each.</td></tr>
+<tr><td><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine2">dsp/engine2/</a></td><td>Newer engines (FM, wave terrain, string machine and others) with the same interface.</td></tr>
+<tr><td><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/oscillator">oscillator/</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/fm">fm/</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/speech">speech/</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/physical_modelling">physical_modelling/</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/drums">drums/</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/noise">noise/</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/fx">fx/</a></td><td>Reusable DSP building blocks.</td></tr>
+<tr><td><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/resources.cc"><code>resources.cc</code></a></td><td>Generated lookup tables (wavetables, sine, etc.).</td></tr>
+</table>
+
+<h2>Signal flow for one block</h2>
+<p>The sample rate is 48 kHz and the block size is 12 samples (<a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/dsp.h#L36">dsp.h</a>). Everything is processed in blocks of 12. <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L99"><code>Voice::Render</code></a> does this each block:</p>
+<ol>
+<li><b>Trigger handling.</b> Detects the rising edge and fires the decay and LPG envelopes.</li>
+<li><b>Engine selection.</b> The ENGINE knob plus CV goes through a quantizer to give an index.</li>
+<li><b>Parameters.</b> <code>ApplyModulations</code> (e.g. <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L209">note</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L221">timbre</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L232">morph</a>) combines knob, attenuverter, patched CV and the internal decay envelope. The result is an <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/engine.h#L55"><code>EngineParameters</code></a> struct with <code>note, timbre, morph, harmonics, accent, trigger</code>. That struct is the whole interface between module and engine.</li>
+<li><b><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L246"><code>e-&gt;Render(...)</code></a></b> fills two 12-sample buffers, <code>out</code> and <code>aux</code>.</li>
+<li><b>Post-processing.</b> The low-pass gate and gain are applied (<a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L254">LPG</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L271">out</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L282">aux</a>), then the result goes to the OUT and AUX jacks.</li>
+</ol>
+<p>Every engine implements the abstract <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/engine.h#L83"><code>Engine</code></a> class (<code>Init</code>, <code>Reset</code>, <code>LoadUserData</code>, <code>Render</code>). In Python terms, <code>voice.cc</code> is a loop calling <code>engines[i].render(params, out, aux)</code>. Engines are <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/voice.cc#L44">registered in a fixed order</a> through the <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/engine.h#L104"><code>EngineRegistry</code></a>. Each registration sets output gains and an <code>already_enveloped</code> flag. Drums and strings set that flag because they shape their own amplitude, so the LPG is bypassed.</p>
+
+<h2>The Virtual Analog engine</h2>
+<p>Files: <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.h"><code>dsp/engine/virtual_analog_engine.h</code></a> and <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.cc"><code>dsp/engine/virtual_analog_engine.cc</code></a>.</p>
+<p>It has four oscillator members: <code>primary_</code>, <code>auxiliary_</code> and <code>sync_</code> are <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/oscillator/variable_shape_oscillator.h"><code>VariableShapeOscillator</code></a>s, and <code>variable_saw_</code> is a <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/oscillator/variable_saw_oscillator.h"><code>VariableSawOscillator</code></a>.</p>
+<p>The <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.cc#L87"><code>Render</code></a> function has three <code>#if VA_VARIANT</code> branches. The header sets <code>VA_VARIANT 2</code>, so <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.cc#L178">variant 2</a> is the one compiled. The other variants map the same parts differently.</p>
+
+<h3>Frequencies</h3>
+<p><code>NoteToFrequency</code> (<a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/engine.h#L39">engine.h</a>) turns the note into a normalised frequency, meaning the phase increment per sample. <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.cc#L72"><code>ComputeDetuning(harmonics)</code></a> maps the HARMONICS knob to an interval for the second oscillator. It interpolates between the stops 0, 7, 12, 19, 24 semitones, with <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.cc#L66"><code>Squash</code></a> applied twice. <code>Squash</code> is a smoothstep, so the knob dwells near each musical interval. The sign lets it go downward too.</p>
+
+<h3>OUT = square + saw</h3>
+<ul>
+<li>The square comes from <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.cc#L238"><code>sync_.Render(...)</code></a>. TIMBRE sets its pulse width, and above 0.5 it also sets the hard-sync ratio.</li>
+<li>The saw comes from <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.cc#L240"><code>variable_saw_.Render(...)</code></a>. MORPH moves it from a notched saw through a plain saw to a triangle-like shape.</li>
+<li>The two are summed with gains <code>square_gain</code> and <code>saw_gain</code>, divided by <code>norm</code> so loudness stays roughly constant.</li>
+</ul>
+
+<h3>AUX = "monster sync"</h3>
+<p><a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/engine/virtual_analog_engine.cc#L202"><code>primary_</code> and <code>auxiliary_</code></a> each run with a sync frequency that rises with TIMBRE², up to 48 semitones. AUX is half of their difference.</p>
+
+<h3>Oscillators and anti-aliasing</h3>
+<ul>
+<li>Each oscillator keeps a <code>phase_</code> that ramps 0 to 1, adding <code>frequency</code> every sample.</li>
+<li>The waveform is computed naively from the phase in <code>ComputeNaiveSample</code> (<a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/oscillator/variable_saw_oscillator.h#L150">saw</a>, <a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/oscillator/variable_shape_oscillator.h#L261">shape</a>).</li>
+<li>Wherever the waveform has a discontinuity (phase wrap, pulse edge, sync reset), the code adds a correction from <code>ThisBlepSample</code> / <code>NextBlepSample</code> and their integrated versions (<a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/oscillator/variable_saw_oscillator.h#L112">example</a>). This is PolyBLEP, a small polynomial that removes aliasing.</li>
+<li>A correction can spill into the following sample, which explains <code>next_sample_</code>. Each loop writes <code>this_sample</code> and carries the leftover forward.</li>
+</ul>
+
+<h3>Smoothing and hard sync</h3>
+<ul>
+<li><code>ParameterInterpolator</code> ramps a value linearly across the 12-sample block from its previous value, avoiding zipper noise. The previous value lives in a member, which is why <code>&amp;frequency_</code> is passed in.</li>
+<li>Hard sync has a master and a slave phase. When the master wraps, the slave resets. The code computes the sub-sample time of the reset (<a href="https://github.com/khorrc/eurorack/blob/54b496167d4d590f70bbac244260296d40f31454/plaits/dsp/oscillator/variable_shape_oscillator.h#L155"><code>reset_time</code></a>) so the BLEP lands at the exact position.</li>
+</ul>
+</body></html>
